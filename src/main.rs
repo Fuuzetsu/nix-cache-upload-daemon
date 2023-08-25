@@ -1,4 +1,5 @@
 use bpaf::*;
+use std::io::Read;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 struct Opts {
@@ -7,6 +8,7 @@ struct Opts {
     thread_stack_size: usize,
     private_key_path: std::ffi::OsString,
     cache_uri: std::ffi::OsString,
+    listen: std::net::SocketAddr,
 }
 
 fn opts() -> impl ::bpaf::Parser<Opts> {
@@ -29,6 +31,9 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
         let cache_uri = ::bpaf::long("cache-uri")
             .help("Cache URI in format nix copy expects it in")
             .argument::<std::ffi::OsString>("CACHE");
+        let listen = ::bpaf::long("listen")
+            .help("Address to listen on")
+            .argument::<std::net::SocketAddr>("listen");
 
         ::bpaf::construct!(Opts {
             num_signers,
@@ -36,6 +41,7 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
             thread_stack_size,
             private_key_path,
             cache_uri,
+            listen,
         })
     }
 }
@@ -45,9 +51,6 @@ fn main() {
         .with(fmt::layer())
         .with(EnvFilter::from_default_env())
         .init();
-    // let subscriber = tracing_subscriber::FmtSubscriber::new();
-
-    // tracing::subscriber::set_global_default(subscriber).unwrap();
 
     let Opts {
         num_signers,
@@ -55,7 +58,11 @@ fn main() {
         thread_stack_size,
         private_key_path,
         cache_uri,
+        listen,
     } = opts().run();
+
+    let listener = std::net::TcpListener::bind(listen).unwrap();
+    tracing::debug!(?listen, "Listening for requests");
 
     let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
 
@@ -100,7 +107,7 @@ fn main() {
                         tracing::debug!("Worker was asked to terminate...");
                         stop = true;
                     }
-                    Msg::Line(line) => {
+                    Msg::Input(line) => {
                         tracing::debug!("Received work: {line}");
                         let uploaders = uploaders.clone();
                         let private_key_path = private_key_path.clone();
@@ -172,15 +179,23 @@ fn main() {
         }
     });
 
-    let _line_consumer = std::thread::spawn({
-        move || {
-            let mut lines = std::io::stdin().lines();
-            while let Some(line) = lines.next() {
-                if let Ok(line) = line {
-                    tracing::debug!("Read input from stdin: {line}");
-                    let _ = worker_tx.send(Msg::Line(line));
+    let _line_consumer = std::thread::spawn(move || loop {
+        if let Ok((mut stream, conn)) = listener.accept() {
+            tracing::debug!(?conn, "New client");
+            let worker_tx = worker_tx.clone();
+            let _listen = std::thread::spawn(move || {
+                let mut input = String::default();
+                let _ = stream.read_to_string(&mut input);
+
+                if input.is_empty() {
+                    tracing::debug!(?conn, "No input from client, doing nothing");
+                } else {
+                    tracing::debug!(?input, ?conn, "Got input from client");
+                    let _ = worker_tx.send(Msg::Input(std::mem::take(&mut input)));
                 }
-            }
+                drop(stream);
+                tracing::debug!(?conn, "Disconnected");
+            });
         }
     });
 
@@ -192,5 +207,5 @@ fn main() {
 
 enum Msg {
     Stop,
-    Line(String),
+    Input(String),
 }
