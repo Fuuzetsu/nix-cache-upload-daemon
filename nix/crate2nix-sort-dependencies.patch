@@ -1,0 +1,46 @@
+From 7579f0aa52dd4058ff4210bb8347638b39db22c9 Mon Sep 17 00:00:00 2001
+From: Mateusz Kowalczyk <fuuzetsu@fuuzetsu.co.uk>
+Date: Fri, 12 Aug 2022 08:16:34 +0900
+Subject: [PATCH] Sort package targets by name
+
+This gives stable ordering, no matter what `cargo metadata` feels like
+returning.
+---
+ src/lib.rs | 21 ++++++++++++++-------
+ 1 file changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/src/lib.rs b/src/lib.rs
+index 62faae1..58d1472 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -165,13 +165,20 @@ fn cargo_metadata(config: &GenerateConfig, cargo_toml: &Path) -> Result<Metadata
+     other_options.push("--locked".into());
+     cmd.manifest_path(&cargo_toml)
+         .other_options(&*other_options);
+-    cmd.exec().map_err(|e| {
+-        format_err!(
+-            "while retrieving metadata about {}: {}",
+-            &cargo_toml.to_string_lossy(),
+-            e
+-        )
+-    })
++    cmd.exec()
++        .map_err(|e| {
++            format_err!(
++                "while retrieving metadata about {}: {}",
++                &cargo_toml.to_string_lossy(),
++                e
++            )
++        })
++        .map(|mut metadata| {
++            for package in metadata.packages.iter_mut() {
++                package.targets.sort_by(|t0, t1| t0.name.cmp(&t1.name))
++            }
++            metadata
++        })
+ }
+ 
+ /// Prefetch hashes when necessary.
+-- 
+2.39.2
+

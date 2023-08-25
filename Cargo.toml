@@ -1,0 +1,20 @@
+[package]
+name = "nix-cache-upload-daemon"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bpaf = { version = "0.9 ", default-features = false }
+ctrlc = { version = "3.4", default-features = false, features = ["termination"] }
+crossbeam-channel = { version = "0.5", default-features = false, features = ["std"] }
+daemonize = { version = "0.5", default-features = false }
+threadpool = { version = "1.8", default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter", "ansi", "registry"] }
+
+
+[profile.release]
+lto = true
+codegen-units = 1

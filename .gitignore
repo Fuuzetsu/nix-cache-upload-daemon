@@ -1,0 +1,25 @@
+tags
+TAGS
+target/
+**/*.rs.bk
+__pycache__/
+/*.strat
+/*.so
+rusty-tags.vi
+.redo
+.ropeproject/
+.vscode/ipch/
+.do_built
+.do_built.dir/
+*.pyc
+*.tmp
+.kak.tags.namecache
+imgui.ini
+.vscode/
+runner/assets/*/*
+node_modules
+
+
+# Added by cargo
+
+/target
