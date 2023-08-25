@@ -64,6 +64,8 @@ fn main() {
     let listener = std::net::TcpListener::bind(listen).unwrap();
     tracing::debug!(?listen, "Listening for requests");
 
+    daemonize::Daemonize::new().start().unwrap();
+
     let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
 
     ctrlc::set_handler({

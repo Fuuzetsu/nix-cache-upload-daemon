@@ -231,6 +231,22 @@ rec {
         };
         resolvedDefaultFeatures = [ "termination" ];
       };
+      "daemonize" = rec {
+        crateName = "daemonize";
+        version = "0.5.0";
+        edition = "2015";
+        sha256 = "0vhikx85f85r46xghsb4avsv6ww8mz9lipqvsia7m21wrfmgv2xb";
+        authors = [
+          "Fedor Gogolev <knsd@knsd.net>"
+        ];
+        dependencies = [
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+        ];
+
+      };
       "hermit-abi" = rec {
         crateName = "hermit-abi";
         version = "0.3.2";
@@ -390,6 +406,11 @@ rec {
             packageId = "ctrlc";
             usesDefaultFeatures = false;
             features = [ "termination" ];
+          }
+          {
+            name = "daemonize";
+            packageId = "daemonize";
+            usesDefaultFeatures = false;
           }
           {
             name = "threadpool";
