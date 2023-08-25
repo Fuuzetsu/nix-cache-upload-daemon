@@ -64,7 +64,9 @@ fn main() {
     let listener = std::net::TcpListener::bind(listen).unwrap();
     tracing::debug!(?listen, "Listening for requests");
 
-    daemonize::Daemonize::new().start().unwrap();
+    let stdout_f = std::fs::File::create("/tmp/ncud.stdout").unwrap();
+    let stderr_f = std::fs::File::create("/tmp/ncud.stderr").unwrap();
+    daemonize::Daemonize::new().stdout(stdout_f).stderr(stderr_f).start().unwrap();
 
     let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
 
