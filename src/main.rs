@@ -9,6 +9,7 @@ struct Opts {
     private_key_path: std::ffi::OsString,
     cache_uri: std::ffi::OsString,
     listen: std::net::SocketAddr,
+    pid_file: Option<std::path::PathBuf>,
 }
 
 fn opts() -> impl ::bpaf::Parser<Opts> {
@@ -34,6 +35,10 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
         let listen = ::bpaf::long("listen")
             .help("Address to listen on")
             .argument::<std::net::SocketAddr>("listen");
+        let pid_file = ::bpaf::long("pid-file")
+            .help("PID file to write to after forking")
+            .argument::<std::path::PathBuf>("PID_FILE")
+            .optional();
 
         ::bpaf::construct!(Opts {
             num_signers,
@@ -42,6 +47,7 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
             private_key_path,
             cache_uri,
             listen,
+            pid_file
         })
     }
 }
@@ -59,12 +65,17 @@ fn main() {
         private_key_path,
         cache_uri,
         listen,
+        pid_file,
     } = opts().run();
 
     let listener = std::net::TcpListener::bind(listen).unwrap();
     tracing::debug!(?listen, "Listening for requests");
 
-    daemonize::Daemonize::new().start().unwrap();
+    let mut daemon = daemonize::Daemonize::new();
+    if let Some(pid_file) = pid_file {
+        daemon = daemon.pid_file(pid_file);
+    }
+    daemon.start().unwrap();
 
     let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
 
