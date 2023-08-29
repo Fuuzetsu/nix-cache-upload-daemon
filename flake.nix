@@ -97,7 +97,7 @@
         }
         );
 
-      devShell = pkgs.mkShell (rust.runTimeVariables // {
+      devShell = pkgs.mkShell {
         nativeBuildInputs = [
           rust.nativeBuildInputs
 
@@ -123,6 +123,6 @@
         shellHook = ''
           export RUSTUP_HOME=$HOME/.rustup-nix-cache-upload-daemon
         '';
-      });
+      };
     });
 }

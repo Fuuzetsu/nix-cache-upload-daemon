@@ -63,24 +63,13 @@ let
     (_: crate: crate.build)
     (cargoNix.workspaceMembers);
 
-  # Information about any extra runtime tools needed by the crates.
-  #
-  # We use vanillaPackages for the runtime dependencies: usually for regular
-  # tools, we don't really care how what rust they were built with. For example,
-  # `skopeo` has a rust dependency in its build chain but we don't want to build
-  # our own version as we change the rust-toolchain. If we do need specific
-  # tools built with specific rust, we can pass them explicitly.
-  crateRunTime = import ./rust_runtime_dependencies.nix { pkgs = vanillaPackages; inherit sourceInfo; };
-
   # Given a single crate, create a wrapper with runtime dependencies if
   # necessary.
   workspaceCrates = builtins.listToAttrs
     (builtins.map
       (raw_crate:
         let
-          # Wrap a crate with any runtime inputs, if any at all.
-          wrappedCrate = crateRunTime.ensureRuntimeInputs raw_crate;
-          metaCrate = wrappedCrate.overrideAttrs (_: {
+          metaCrate = raw_crate.overrideAttrs (_: {
             # We set meta.mainProgram to the crate name. This allows nix run to
             # just work like `nix run .#isim <feedspec>` for flakes and
             # presumably some similar form for vanilla form.
@@ -102,11 +91,5 @@ let
 in
 {
   inherit rustToolchainPkgs workspaceCrates;
-  inherit (crateBuildTimeOverrides) nativeBuildInputs;
-  # Any extra build time and run time dependencies we declared for any crates. Putting this
-  # in the shell environment should ensure we're not missing any system
-  # libraries during regular cargo builds in the shell.
-  buildInputs = crateBuildTimeOverrides.buildInputs ++ builtins.attrValues crateRunTime.runTimeDependencies;
-
-  runTimeVariables = vanillaPackages.lib.foldr (l: r: l // r) { } (builtins.attrValues crateRunTime.runTimeVariables);
+  inherit (crateBuildTimeOverrides) nativeBuildInputs buildInputs;
 }
