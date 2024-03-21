@@ -12,6 +12,7 @@ struct Opts {
     pid_file: Option<std::path::PathBuf>,
     stdout_file: Option<std::path::PathBuf>,
     stderr_file: Option<std::path::PathBuf>,
+    tracing_file: Option<std::path::PathBuf>,
 }
 
 fn opts() -> impl ::bpaf::Parser<Opts> {
@@ -49,6 +50,10 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
             .help("File to write stderr to after forking")
             .argument::<std::path::PathBuf>("FILE")
             .optional();
+        let tracing_file = ::bpaf::long("tracing-file")
+            .help("File to write tracing logs to")
+            .argument::<std::path::PathBuf>("FILE")
+            .optional();
 
         ::bpaf::construct!(Opts {
             num_signers,
@@ -60,16 +65,12 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
             pid_file,
             stdout_file,
             stderr_file,
+            tracing_file
         })
     }
 }
 
 fn main() {
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
-        .init();
-
     let Opts {
         num_signers,
         num_uploaders,
@@ -80,7 +81,17 @@ fn main() {
         pid_file,
         stdout_file,
         stderr_file,
+        tracing_file,
     } = opts().run();
+
+    let subs = tracing_subscriber::registry().with(EnvFilter::from_default_env());
+
+    if let Some(tracing_file) = tracing_file {
+        let tracing_file = std::fs::File::create(tracing_file).unwrap();
+        subs.with(fmt::layer().with_writer(tracing_file)).init();
+    } else {
+        subs.with(fmt::layer()).init();
+    };
 
     let listener = std::net::TcpListener::bind(listen).unwrap();
     tracing::debug!(?listen, "Listening for requests");
@@ -97,6 +108,7 @@ fn main() {
         let stderr_file = std::fs::File::create(stderr_file).unwrap();
         daemon = daemon.stderr(stderr_file);
     }
+
     daemon.start().unwrap();
 
     let (worker_tx, worker_rx) = crossbeam_channel::unbounded();

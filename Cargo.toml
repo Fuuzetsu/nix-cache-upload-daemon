@@ -14,7 +14,6 @@ threadpool = { version = "1.8", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter", "ansi", "registry"] }
 
-
 [profile.release]
 lto = true
 codegen-units = 1
