@@ -10,6 +10,8 @@ struct Opts {
     cache_uri: std::ffi::OsString,
     listen: std::net::SocketAddr,
     pid_file: Option<std::path::PathBuf>,
+    stdout_file: Option<std::path::PathBuf>,
+    stderr_file: Option<std::path::PathBuf>,
 }
 
 fn opts() -> impl ::bpaf::Parser<Opts> {
@@ -39,6 +41,14 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
             .help("PID file to write to after forking")
             .argument::<std::path::PathBuf>("PID_FILE")
             .optional();
+        let stdout_file = ::bpaf::long("stdout-file")
+            .help("File to write stdout to after forking")
+            .argument::<std::path::PathBuf>("FILE")
+            .optional();
+        let stderr_file = ::bpaf::long("stderr-file")
+            .help("File to write stderr to after forking")
+            .argument::<std::path::PathBuf>("FILE")
+            .optional();
 
         ::bpaf::construct!(Opts {
             num_signers,
@@ -47,7 +57,9 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
             private_key_path,
             cache_uri,
             listen,
-            pid_file
+            pid_file,
+            stdout_file,
+            stderr_file,
         })
     }
 }
@@ -66,6 +78,8 @@ fn main() {
         cache_uri,
         listen,
         pid_file,
+        stdout_file,
+        stderr_file,
     } = opts().run();
 
     let listener = std::net::TcpListener::bind(listen).unwrap();
@@ -74,6 +88,14 @@ fn main() {
     let mut daemon = daemonize::Daemonize::new();
     if let Some(pid_file) = pid_file {
         daemon = daemon.pid_file(pid_file);
+    }
+    if let Some(stdout_file) = stdout_file {
+        let stdout_file = std::fs::File::create(stdout_file).unwrap();
+        daemon = daemon.stdout(stdout_file);
+    }
+    if let Some(stderr_file) = stderr_file {
+        let stderr_file = std::fs::File::create(stderr_file).unwrap();
+        daemon = daemon.stderr(stderr_file);
     }
     daemon.start().unwrap();
 
