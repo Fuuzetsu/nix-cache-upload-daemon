@@ -172,9 +172,12 @@ fn main() {
                             {
                                 Ok(status) => {
                                     if status.success() {
-                                        tracing::debug!(?paths, ?cache_uri, "Uploading {} paths", paths.len());
+                                        tracing::debug!(?paths, ?cache_uri, "Queueing upload of {} paths", paths.len());
                                         uploaders.lock().unwrap().execute(move || {
-                                            match std::process::Command::new("nix").arg("copy").arg("--to").arg(cache_uri.as_os_str()).args(&paths).status() {
+                                            let mut cmd = std::process::Command::new("nix");
+                                            cmd.arg("copy").arg("--to").arg(cache_uri.as_os_str()).args(&paths);
+                                            tracing::debug!(?paths, ?cache_uri, "Executing upload of {} paths with {cmd:?}", paths.len());
+                                            match cmd.status() {
                                                 Ok(status) => if status.success() {
                                                     tracing::info!(?paths, ?cache_uri, "Signed and uploaded {} paths", paths.len())
                                                 } else {
