@@ -1,11 +1,12 @@
+use std::ffi::OsString;
+
 use bpaf::*;
-use std::io::Read;
+use tokio::{io::AsyncReadExt, sync::mpsc::UnboundedSender};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 struct Opts {
     num_signers: usize,
     num_uploaders: usize,
-    thread_stack_size: usize,
     private_key_path: std::ffi::OsString,
     cache_uri: std::ffi::OsString,
     listen: std::net::SocketAddr,
@@ -25,10 +26,6 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
             .help("Number of threads to use to upload signed paths.")
             .argument::<usize>("NUM_UPLOADERS")
             .fallback(64);
-        let thread_stack_size = ::bpaf::long("thread-stack-size")
-            .help("Stack size for spawned threads. 512KiB by default.")
-            .argument::<usize>("STACK_SIZE")
-            .fallback(512 * 1024);
         let private_key_path = ::bpaf::long("private-key-path")
             .help("Path to the signing private key")
             .argument::<std::ffi::OsString>("PATH");
@@ -58,7 +55,6 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
         ::bpaf::construct!(Opts {
             num_signers,
             num_uploaders,
-            thread_stack_size,
             private_key_path,
             cache_uri,
             listen,
@@ -74,7 +70,6 @@ fn main() {
     let Opts {
         num_signers,
         num_uploaders,
-        thread_stack_size,
         private_key_path,
         cache_uri,
         listen,
@@ -111,148 +106,161 @@ fn main() {
 
     daemon.start().unwrap();
 
-    let (worker_tx, worker_rx) = crossbeam_channel::unbounded();
+    // Tokio needs to run after daemonization or we end up having a very bad
+    // have a bad time...
+    //
+    // https://stackoverflow.com/questions/76042987/having-problem-in-rust-with-tokio-and-daemonize-how-to-get-them-to-work-togethe
+    tokio_main(
+        listener,
+        num_signers,
+        num_uploaders,
+        cache_uri,
+        private_key_path,
+    );
+}
 
-    ctrlc::set_handler({
-        let worker_tx = worker_tx.clone();
-        move || {
+#[tokio::main]
+async fn tokio_main(
+    listener: std::net::TcpListener,
+    num_signers: usize,
+    num_uploaders: usize,
+    cache_uri: OsString,
+    private_key_path: OsString,
+) {
+    // We want a listener before daemonization but we then need the tokio one to
+    // use with futures...
+    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+    // Spawn early so we handle Ctrl-C from here...
+    //
+    // I think we have a race between daemonisation and registering the signal.
+    // Do we need to register the signal earlier?
+    //
+    // We need to poll the future straight away (which registers the signal) but
+    // we want to yield only later, after all the other stuff is started. So we
+    // wrap in tokio::spawn which will register and we can poll it later to get
+    // the result.
+    let stop = tokio::spawn(async move {
+        if let Ok(()) = tokio::signal::ctrl_c().await {
             tracing::debug!("Termination signal received...");
-            let _ = worker_tx.send(Msg::Stop);
-        }
-    })
-    .unwrap();
-
-    let worker = std::thread::spawn(move || {
-        tracing::debug!(
-            ?num_signers,
-            ?thread_stack_size,
-            "Spawning signer threadpool"
-        );
-        let signers = threadpool::Builder::new()
-            .num_threads(num_signers)
-            .thread_stack_size(thread_stack_size)
-            .build();
-
-        tracing::debug!(
-            ?num_uploaders,
-            ?thread_stack_size,
-            "Spawning uploader threadpool",
-        );
-        let uploaders = std::sync::Arc::new(std::sync::Mutex::new(
-            threadpool::Builder::new()
-                .num_threads(num_uploaders)
-                .thread_stack_size(thread_stack_size)
-                .build(),
-        ));
-        let private_key_path = std::sync::Arc::new(private_key_path);
-        let cache_uri = std::sync::Arc::new(cache_uri);
-        let mut stop = false;
-        loop {
-            match worker_rx.recv() {
-                Ok(msg) => match msg {
-                    Msg::Stop => {
-                        tracing::debug!("Worker was asked to terminate...");
-                        stop = true;
-                    }
-                    Msg::Input(line) => {
-                        tracing::debug!("Received work: {line}");
-                        let uploaders = uploaders.clone();
-                        let private_key_path = private_key_path.clone();
-                        let cache_uri = cache_uri.clone();
-                        signers.execute(move || {
-                            let paths = line.split_whitespace().map(|s| s.to_owned()).collect::<Vec<_>>();
-                            tracing::debug!(?paths, ?private_key_path, "Signing {} paths", paths.len());
-                            match std::process::Command::new("nix")
-                                .arg("store")
-                                .arg("sign")
-                                .arg("-k")
-                                .arg(private_key_path.as_os_str())
-                                .args(&paths)
-                                .status()
-                            {
-                                Ok(status) => {
-                                    if status.success() {
-                                        tracing::debug!(?paths, ?cache_uri, "Uploading {} paths", paths.len());
-                                        uploaders.lock().unwrap().execute(move || {
-                                            match std::process::Command::new("nix").arg("copy").arg("--to").arg(cache_uri.as_os_str()).args(&paths).status() {
-                                                Ok(status) => if status.success() {
-                                                    tracing::info!(?paths, ?cache_uri, "Signed and uploaded {} paths", paths.len())
-                                                } else {
-                                                    tracing::error!(?paths, ?cache_uri, ?status, "Failed to upload {} paths", paths.len())
-                                                },
-                                                Err(error) => {
-                                                    tracing::error!(
-                                                        ?paths,
-                                                        ?error,
-                                                        ?cache_uri,
-                                                        "Failed to execute upload process for {} paths",
-                                                        paths.len()
-                                                    )
-                                                },
-                                            }
-                                        })
-                                    } else {
-                                        tracing::error!(
-                                            ?paths,
-                                            ?status,
-                                            "Failed to sign some paths, skipping upload"
-                                        );
-                                    }
-                                }
-                                Err(error) => {
-                                    tracing::error!(
-                                        ?paths,
-                                        ?error,
-                                        "Failed to execute signing process skipping upload of {} paths",
-                                        paths.len()
-                                    )
-                                }
-                            }
-                        });
-                    }
-                },
-                Err(error) => {
-                    tracing::error!(?error, "Work channel closed, terminating work thread...");
-                    stop = true;
-                }
-            }
-            if stop {
-                tracing::debug!("Waiting for signers to terminate");
-                signers.join();
-                tracing::debug!("Waiting for uploaders to terminate");
-                uploaders.lock().unwrap().join();
-                break;
-            }
         }
     });
 
-    let _line_consumer = std::thread::spawn(move || loop {
-        if let Ok((mut stream, conn)) = listener.accept() {
+    // Yield the stop, throwing away any failure (I/O?)
+    let stop = async move {
+        let _ = stop.await;
+    };
+
+    let listener = |tx: UnboundedSender<String>| async move {
+        loop {
+            let Ok((mut stream, conn)) = listener.accept().await else {
+                continue;
+            };
             tracing::debug!(?conn, "New client");
-            let worker_tx = worker_tx.clone();
-            let _listen = std::thread::spawn(move || {
+            // Spawn a future to handle the client so that we can accept more
+            // connections. We never await these explicitly as the client can
+            // just connect and sit there... We could limit the number of
+            // concurrent futures but don't bother for now...
+            let tx = tx.clone();
+            tokio::spawn(async move {
                 let mut input = String::default();
-                let _ = stream.read_to_string(&mut input);
+                let _ = stream.read_to_string(&mut input).await;
 
                 if input.is_empty() {
                     tracing::debug!(?conn, "No input from client, doing nothing");
                 } else {
                     tracing::debug!(?input, ?conn, "Got input from client");
-                    let _ = worker_tx.send(Msg::Input(std::mem::take(&mut input)));
+                    let _ = tx.send(std::mem::take(&mut input));
                 }
                 drop(stream);
                 tracing::debug!(?conn, "Disconnected");
             });
         }
-    });
+    };
 
-    // Wait for worker to finish on whatever lines it had so far. Expilictly do
-    // _not_ wait for the line consumer as that might be blocking forever on
-    // stdin.
-    worker.join().unwrap();
-}
+    let uploader = move |paths: Vec<String>| {
+        let cache_uri = cache_uri.clone();
+        async move {
+            match tokio::process::Command::new("nix")
+                .arg("copy")
+                .arg("--to")
+                .arg(cache_uri.as_os_str())
+                .args(&paths)
+                .status()
+                .await
+            {
+                Ok(status) => {
+                    if status.success() {
+                        tracing::info!(
+                            ?paths,
+                            ?cache_uri,
+                            "Signed and uploaded {} paths",
+                            paths.len()
+                        )
+                    } else {
+                        tracing::error!(
+                            ?paths,
+                            ?cache_uri,
+                            ?status,
+                            "Failed to upload {} paths",
+                            paths.len()
+                        )
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        ?paths,
+                        ?error,
+                        ?cache_uri,
+                        "Failed to execute upload process for {} paths",
+                        paths.len()
+                    )
+                }
+            }
+        }
+    };
 
-enum Msg {
-    Stop,
-    Input(String),
+    let signer = move |line: String| {
+        let private_key_path = private_key_path.clone();
+        async move {
+            let paths = line
+                .split_whitespace()
+                .map(|s| s.to_owned())
+                .collect::<Vec<_>>();
+            tracing::debug!(?paths, ?private_key_path, "Signing {} paths", paths.len());
+            match tokio::process::Command::new("nix")
+                .arg("store")
+                .arg("sign")
+                .arg("-k")
+                .arg(private_key_path.as_os_str())
+                .args(&paths)
+                .status()
+                .await
+            {
+                Ok(status) => {
+                    if status.success() {
+                        tracing::debug!(?paths, "Signed {} paths", paths.len());
+                        Some(paths)
+                    } else {
+                        tracing::error!(
+                            ?paths,
+                            ?status,
+                            "Failed to sign some paths, skipping upload"
+                        );
+                        None
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        ?paths,
+                        ?error,
+                        "Failed to execute signing process skipping upload of {} paths",
+                        paths.len()
+                    );
+                    None
+                }
+            }
+        }
+    };
+
+    nix_cache_upload_daemon::run(num_signers, num_uploaders, listener, signer, uploader, stop).await
 }
