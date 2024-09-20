@@ -8,6 +8,7 @@ struct Opts {
     private_key_path: std::ffi::OsString,
     cache_uri: std::ffi::OsString,
     listen: std::net::SocketAddr,
+    no_daemon: bool,
     pid_file: Option<std::path::PathBuf>,
     stdout_file: Option<std::path::PathBuf>,
     stderr_file: Option<std::path::PathBuf>,
@@ -33,6 +34,7 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
         let listen = ::bpaf::long("listen")
             .help("Address to listen on")
             .argument::<std::net::SocketAddr>("listen");
+        let no_daemon = ::bpaf::long("no-daemon").switch().help("Do not daemonise");
         let pid_file = ::bpaf::long("pid-file")
             .help("PID file to write to after forking")
             .argument::<std::path::PathBuf>("PID_FILE")
@@ -56,6 +58,7 @@ fn opts() -> impl ::bpaf::Parser<Opts> {
             private_key_path,
             cache_uri,
             listen,
+            no_daemon,
             pid_file,
             stdout_file,
             stderr_file,
@@ -72,6 +75,7 @@ async fn main() {
         private_key_path,
         cache_uri,
         listen,
+        no_daemon,
         pid_file,
         stdout_file,
         stderr_file,
@@ -90,20 +94,22 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(listen).await.unwrap();
     tracing::debug!(?listen, "Listening for requests");
 
-    let mut daemon = daemonize::Daemonize::new();
-    if let Some(pid_file) = pid_file {
-        daemon = daemon.pid_file(pid_file);
-    }
-    if let Some(stdout_file) = stdout_file {
-        let stdout_file = std::fs::File::create(stdout_file).unwrap();
-        daemon = daemon.stdout(stdout_file);
-    }
-    if let Some(stderr_file) = stderr_file {
-        let stderr_file = std::fs::File::create(stderr_file).unwrap();
-        daemon = daemon.stderr(stderr_file);
-    }
+    if !no_daemon {
+        let mut daemon = daemonize::Daemonize::new();
+        if let Some(pid_file) = pid_file {
+            daemon = daemon.pid_file(pid_file);
+        }
+        if let Some(stdout_file) = stdout_file {
+            let stdout_file = std::fs::File::create(stdout_file).unwrap();
+            daemon = daemon.stdout(stdout_file);
+        }
+        if let Some(stderr_file) = stderr_file {
+            let stderr_file = std::fs::File::create(stderr_file).unwrap();
+            daemon = daemon.stderr(stderr_file);
+        }
 
-    daemon.start().unwrap();
+        daemon.start().unwrap();
+    }
 
     // Spawn early so we handle Ctrl-C from here...
     //
