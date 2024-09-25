@@ -140,12 +140,13 @@ async fn tokio_main(
     // we want to yield only later, after all the other stuff is started. So we
     // wrap in tokio::spawn which will register and we can poll it later to get
     // the result.
-    let mut stop = tokio::spawn(tokio::signal::ctrl_c());
+    let mut stop =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
 
     let listener = |tx: UnboundedSender<String>| async move {
         loop {
             tokio::select! {
-                _ = &mut stop => {
+                _ = stop.recv() => {
                     tracing::debug!("Termination signal received, stopping listener");
                     break
                 }
