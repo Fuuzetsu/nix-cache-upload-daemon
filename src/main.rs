@@ -129,6 +129,7 @@ async fn tokio_main(
 ) {
     // We want a listener before daemonization but we then need the tokio one to
     // use with futures...
+    listener.set_nonblocking(true).unwrap();
     let listener = tokio::net::TcpListener::from_std(listener).unwrap();
     // Spawn early so we handle Ctrl-C from here...
     //
@@ -139,41 +140,37 @@ async fn tokio_main(
     // we want to yield only later, after all the other stuff is started. So we
     // wrap in tokio::spawn which will register and we can poll it later to get
     // the result.
-    let stop = tokio::spawn(async move {
-        if let Ok(()) = tokio::signal::ctrl_c().await {
-            tracing::debug!("Termination signal received...");
-        }
-    });
-
-    // Yield the stop, throwing away any failure (I/O?)
-    let stop = async move {
-        let _ = stop.await;
-    };
+    let mut stop = tokio::spawn(tokio::signal::ctrl_c());
 
     let listener = |tx: UnboundedSender<String>| async move {
         loop {
-            let Ok((mut stream, conn)) = listener.accept().await else {
-                continue;
-            };
-            tracing::debug!(?conn, "New client");
-            // Spawn a future to handle the client so that we can accept more
-            // connections. We never await these explicitly as the client can
-            // just connect and sit there... We could limit the number of
-            // concurrent futures but don't bother for now...
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                let mut input = String::default();
-                let _ = stream.read_to_string(&mut input).await;
-
-                if input.is_empty() {
-                    tracing::debug!(?conn, "No input from client, doing nothing");
-                } else {
-                    tracing::debug!(?input, ?conn, "Got input from client");
-                    let _ = tx.send(std::mem::take(&mut input));
+            tokio::select! {
+                _ = &mut stop => {
+                    tracing::debug!("Termination signal received, stopping listener");
+                    break
                 }
-                drop(stream);
-                tracing::debug!(?conn, "Disconnected");
-            });
+                Ok((mut stream, conn)) = listener.accept() => {
+                    tracing::debug!(?conn, "New client");
+                    // Spawn a future to handle the client so that we can accept more
+                    // connections. We never await these explicitly as the client can
+                    // just connect and sit there... We could limit the number of
+                    // concurrent futures but don't bother for now...
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let mut input = String::default();
+                        let _ = stream.read_to_string(&mut input).await;
+
+                        if input.is_empty() {
+                            tracing::debug!(?conn, "No input from client, doing nothing");
+                        } else {
+                            tracing::debug!(?input, ?conn, "Got input from client");
+                            let _ = tx.send(std::mem::take(&mut input));
+                        }
+                        drop(stream);
+                        tracing::debug!(?conn, "Disconnected");
+                    });
+                }
+            }
         }
     };
 
@@ -262,5 +259,5 @@ async fn tokio_main(
         }
     };
 
-    nix_cache_upload_daemon::run(num_signers, num_uploaders, listener, signer, uploader, stop).await
+    nix_cache_upload_daemon::run(num_signers, num_uploaders, listener, signer, uploader).await
 }
