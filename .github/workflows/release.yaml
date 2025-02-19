@@ -21,8 +21,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build
+      - name: Setup toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Build
         run: cargo --release --target ${{ matrix.job.target }}
 
       - name: Extract crate information
