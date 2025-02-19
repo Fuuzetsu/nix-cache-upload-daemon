@@ -3,7 +3,10 @@ name: Release
 permissions:
   contents: write
 
-on: push
+on:
+  push:
+    tags:
+      - "**"
 
 jobs:
   build:
@@ -15,14 +18,19 @@ jobs:
           - {
               os: ubuntu-latest,
               target: x86_64-unknown-linux-musl,
-              use-cross: true,
               extension: "",
             }
     steps:
-      - name: Checkout and build
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: --release --target ${{ matrix.job.target }}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.job.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.job.target }}
 
       - name: Extract crate information
         shell: bash
